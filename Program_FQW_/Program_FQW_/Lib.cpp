@@ -65,7 +65,7 @@ double LayeredAtmosphere::getAbsorption(double altitude) const {
 const std::vector<LayeredAtmosphere::Layer>& LayeredAtmosphere::getLayers() const { return layers_; }
 
 // Полезно: узнать имя слоя на высоте
-std::string LayeredAtmosphere::getLayerName(double altitude) const {
+double LayeredAtmosphere::getLayerNumber(double altitude) const {
     const Layer* l = findLayer(altitude);
-    return l ? l->name : "вне атмосферы";
+    return l ? l->number : 0;
 }

@@ -1,6 +1,7 @@
-
 #ifndef Lib_hpp
 #define Lib_hpp
+
+using namespace std;
 
 #include <stdio.h>
 #include <vector>
@@ -64,7 +65,7 @@ public:
         double upperHeight;
         double attenuation;
         double absorption;
-        std::string name;
+        double number;
     };
 
 protected:
@@ -93,11 +94,11 @@ public:
 
         for (const auto& l : layers_) {
             if (l.upperHeight <= l.lowerHeight)
-                throw std::invalid_argument("Слой '" + l.name +
-                    "': верхняя граница ниже нижней");
+                throw std::invalid_argument("Слой " + to_string(l.number) +
+                    ": верхняя граница ниже нижней");
             if (l.lowerHeight < groundHeight_ || l.upperHeight > topHeight_)
-                throw std::invalid_argument("Слой '" + l.name +
-                    "' выходит за границы атмосферы");
+                throw std::invalid_argument("Слой " + to_string(l.number) +
+                    " выходит за границы атмосферы");
         }
     }
 
@@ -108,7 +109,7 @@ public:
 
     const std::vector<Layer>& getLayers() const;
     
-    std::string getLayerName(double altitude) const;
+    double getLayerNumber(double altitude) const;
 };
 
 
