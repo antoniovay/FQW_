@@ -13,6 +13,7 @@
 
 constexpr double FQW_PI = 3.141592653589793238462643383279502884;
 
+// Координаты положения отсчитываются от центра Земли и измеряются в метрах, вектор направления нормирован до 1 м.
 struct Vec3 {
     double x{}, y{}, z{};
     Vec3() = default;
@@ -33,6 +34,9 @@ struct Vec3 {
     Vec3& operator+=(const Vec3& o) { x += o.x; y += o.y; z += o.z; return *this; }
 };
 
+// altitude - высота над поверхностью Земли
+// getAttenuation() возвращает коэффициент рассеяния mu_s (1/м).
+// getAbsorption() возвращает коэффициент поглощения mu_a (1/м).
 class IAtmosphere {
 public:
     virtual ~IAtmosphere() = default;
@@ -44,6 +48,7 @@ public:
     virtual std::vector<double> getBoundaryHeights() const;
 };
 
+// вне атмосферы mu_s = mu_a = 0
 class SimpleAtmosphere : public IAtmosphere {
 protected:
     double groundHeight_, topHeight_, attenuation_, absorption_;
@@ -56,6 +61,7 @@ public:
     double getAbsorption(double altitude) const override;
 };
 
+// в промежутках между слоев mu_s = mu_a = 0
 class LayeredAtmosphere : public IAtmosphere {
 public:
     struct Layer {
@@ -77,13 +83,26 @@ public:
     double getAbsorption(double altitude) const override;
     const std::vector<Layer>& getLayers() const;
     double getLayerNumber(double altitude) const;
+    // высоты, где меняется коэффициент среды
     std::vector<double> getBoundaryHeights() const override;
 };
 
+// Модель взаимодействия с поверхностью:
+// Absorb - фотон поглощён
+// DiffuseReflect - фотон отражается в верхнюю полусферу по закону Ламберта
 enum class GroundMode { Absorb, DiffuseReflect };
 
+// Одна траектория фотона. Положение задаётся в глобальных декартовых координатах
+// direction_ - единичное направление движения
+// pathLength_ - накопленный путь
+// step() моделирует один участок до следующего столкновения или границы.
 class Photon {
 public:
+    // Конечное состояние траектории:
+    // Alive - движется
+    // Absorbed - поглощён в атмосфере
+    // Escaped - вылетел наверх
+    // GroundAbsorbed - поглощён поверхностью
     enum class State { Alive, Absorbed, Escaped, GroundAbsorbed };
     Photon(const Vec3& position, const Vec3& direction);
     const Vec3& getPosition() const { return position_; }
@@ -91,6 +110,7 @@ public:
     State getState() const { return state_; }
     double getPathLength() const { return pathLength_; }
     int getStepCount() const { return stepCount_; }
+    // событие - перемещение до следующего столкновения или границы
     bool step(const IAtmosphere& atmosphere, double earthRadius, GroundMode groundMode);
     static Vec3 randomIsotropicDirection();
     static Vec3 randomLambertianDirection(const Vec3& outwardNormal);
@@ -113,6 +133,7 @@ public:
         Vec3 finalPosition;
         Vec3 finalDirection;
     };
+    // статистика: active - траектории, которые не завершились до maxEvents, они учитываются в балансе
     struct Statistics {
         std::uint64_t launched = 0;
         std::uint64_t escaped = 0;

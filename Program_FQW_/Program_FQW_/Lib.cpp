@@ -3,6 +3,9 @@
 
 
 namespace {
+// малые допуски для устойчивой работы вычислений с плавающей точкой
+// EPS_DISTANCE чтобы не считать пересечение в текущей точке повторным событием
+// COEFFICIENT_EPS защищает деление на почти нулевой mu_t
     constexpr double EPS_DISTANCE = 1e-7;
     constexpr double COEFFICIENT_EPS = 1e-15;
     
@@ -70,6 +73,7 @@ LayeredAtmosphere::LayeredAtmosphere(double groundHeight, double topHeight, std:
     }
 }
 
+// Возвращает слой, содержащий заданную высоту. Верхней границы слоя нет, кроме последнего слоя; это помогает однозначно обрабатывать точки на стыке соседних слоёв.
 const LayeredAtmosphere::Layer* LayeredAtmosphere::findLayer(double altitude) const {
     for (const auto& layer : layers_) {
         if (altitude >= layer.lowerHeight && altitude < layer.upperHeight) return &layer;
@@ -106,6 +110,7 @@ double LayeredAtmosphere::getLayerNumber(double altitude) const {
     return layer ? layer->number : -1.0;
 }
 
+// Сборка и сортировка всех высот, где может измениться mu_s или mu_a. Повторы удаляются - не получится дважды обработать совпадающие границы.
 std::vector<double> LayeredAtmosphere::getBoundaryHeights() const {
     std::vector<double> boundaries{groundHeight_, topHeight_};
     for (const auto& layer : layers_) {
@@ -124,11 +129,13 @@ Photon::Photon(const Vec3& position, const Vec3& direction)
     : position_(position), direction_(direction.normalized()), state_(State::Alive), pathLength_(0.0), stepCount_(0)
 {}
 
+// Равномерная с.в. U на интервале [a, b]. Генератор локален для потока выполнения
 double Photon::uniform(double a, double b) {
     static thread_local std::mt19937_64 generator(std::random_device{}());
     return std::uniform_real_distribution<double>(a, b)(generator);
 }
 
+// Изотропное направление в 3D: cos(theta) равномерно распределён на [-1, 1], азимут phi равномерно распределён на [0, 2*pi)
 Vec3 Photon::randomIsotropicDirection() {
     const double z = uniform(-1.0, 1.0);
     const double phi = 2.0 * FQW_PI * uniform();
@@ -136,6 +143,7 @@ Vec3 Photon::randomIsotropicDirection() {
     return {r*std::cos(phi), r*std::sin(phi), z};
 }
 
+// Генерирует направление диффузно отражённого фотона в полусфере над нормалью. Для закона Ламберта cos(theta) = sqrt(U), phi = 2*pi*U. Векторы tangent и bitangent строят локальный базис, который затем переводит направление в глобальную систему координат
 Vec3 Photon::randomLambertianDirection(const Vec3& outwardNormal) {
     const Vec3 n = outwardNormal.normalized();
     const double cosTheta = std::sqrt(uniform());
@@ -147,6 +155,7 @@ Vec3 Photon::randomLambertianDirection(const Vec3& outwardNormal) {
     return (n*cosTheta + tangent*(sinTheta*std::cos(phi)) + bitangent*(sinTheta*std::sin(phi))).normalized();
 }
 
+// Находит ближайшее положительное расстояние t до сферы радиуса radius. Точка луча имеет вид p + t*d. Из |p + t*d|^2 = radius^2 и |d|=1 следует квадратное уравнение t^2 + 2(p·d)t + (p·p - radius^2) = 0. Если пересечения впереди нет, возвращается бесконечность.
 double Photon::nextSphereIntersection(const Vec3& p, const Vec3& d, double radius) {
     const double b = p.dot(d);
     const double c = p.dot(p) - radius*radius;
@@ -165,6 +174,7 @@ Vec3 Photon::sampleScatterDirection() {
     return randomIsotropicDirection();
 }
 
+// Продвижение до события (столкновение в среде, пересечение верхней границы, достижение поверхности, переход между слоями). Оптическая длина tau = -ln(U) разыгрывается один раз на свободном пробеге. Если луч пересекает границу слоя раньше столкновения, из tau вычитается mu_t * расстояние, и остаток tau переносится в следующий слой. Коэффициент используется не только в начальной точке для всего пути.
 bool Photon::step(const IAtmosphere& atmosphere, double earthRadius, GroundMode groundMode) {
     if (state_ != State::Alive)
         return false;
@@ -175,6 +185,7 @@ bool Photon::step(const IAtmosphere& atmosphere, double earthRadius, GroundMode 
     const double currentAltitude = currentRadius-earthRadius;
     const double radialDirection = position_.dot(direction_);
 
+    // фотон, запущенный в землю, сразу же ударяется
     if (currentAltitude <= atmosphere.getGroundHeight()+EPS_DISTANCE && radialDirection < 0.0) {
         if (groundMode == GroundMode::Absorb)
             state_ = State::GroundAbsorbed;
@@ -182,6 +193,7 @@ bool Photon::step(const IAtmosphere& atmosphere, double earthRadius, GroundMode 
         return state_ == State::Alive;
     }
 
+    // Розыгрыш оптической длины свободного пробега. Для равномерного U на (0,1) величина tau = -ln(U) имеет экспоненциальное распределение с единичным средним. В однородном участке расстояние до столкновения s = tau / mu_t, где mu_t = mu_s + mu_a. В неоднородной среде tau расходуется по участкам.
     const double u = std::max(uniform(), std::numeric_limits<double>::min());
     double remainingOpticalDepth = -std::log(u);
     const auto boundaries = atmosphere.getBoundaryHeights();
@@ -204,15 +216,19 @@ bool Photon::step(const IAtmosphere& atmosphere, double earthRadius, GroundMode 
                 boundaryDistance = distance;
             }
         }
+        
+        // Локальные оптические коэффициенты в текущей точке. Их сумма задаёт вероятность любого взаимодействия на единицу длины: mu_t = mu_s + mu_a
         const double muS = atmosphere.getAttenuation(altitude);
         const double muA = atmosphere.getAbsorption(altitude);
         const double muT = muS + muA;
         const double collisionDistance = (muT > COEFFICIENT_EPS)
             ? remainingOpticalDepth/muT : std::numeric_limits<double>::infinity();
 
+        // Если столкновение произойдёт раньше ближайшей сферической границы, переносим фотон на это расстояние. Иначе сначала пересекаем границу и уменьшаем оставшуюся оптическую длину на mu_t * boundaryDistance.
         if (collisionDistance < boundaryDistance) {
             position_ += direction_*collisionDistance;
             pathLength_ += collisionDistance;
+            // столкновение приводит к поглощению с вероятностью mu_a/mu_t, иначе фотон рассеивается и получает новое направление.
             if (uniform() < muA/muT) {
                 state_ = State::Absorbed;
                 return false;
@@ -243,6 +259,7 @@ bool Photon::step(const IAtmosphere& atmosphere, double earthRadius, GroundMode 
             direction_ = randomLambertianDirection(position_.normalized());
             return true;
         }
+        // После пересечения внутренней границы смещаемся на очень малое расстояние, чтобы следующая итерация определила коэффициенты уже по новой стороне границы и не нашла ту же самую сферу повторно.
         const double nudge = 1e-6;
         position_ += direction_*nudge;
         pathLength_ += nudge;
@@ -253,6 +270,7 @@ bool Photon::step(const IAtmosphere& atmosphere, double earthRadius, GroundMode 
 
 // ----- Simulation -----
 
+// Доли исходов относительно числа запущенных историй; при launched == 0 возвращаем ноль, чтобы не было деления на ноль
 double Simulation::Statistics::escapedFraction() const {
     return launched ? static_cast<double>(escaped)/launched : 0.0;
 }
@@ -265,6 +283,7 @@ double Simulation::Statistics::groundAbsorbedFraction() const {
     return launched ? static_cast<double>(groundAbsorbed)/launched : 0.0;
 }
 
+// Сохраняет модель атмосферы и параметры поверхности; некорректные значения будут отклоняться сразу при создании Simulation.
 Simulation::Simulation(std::shared_ptr<IAtmosphere> atmosphere, double earthRadius, GroundMode groundMode)
     : atmosphere_(std::move(atmosphere)), earthRadius_(earthRadius), groundMode_(groundMode) {
     if (!atmosphere_)
@@ -273,6 +292,7 @@ Simulation::Simulation(std::shared_ptr<IAtmosphere> atmosphere, double earthRadi
         throw std::invalid_argument("Радиус Земли должен быть положительным");
 }
 
+// Моделирование одной траектории. Старт должен находиться на нижней границе атмосферы; цикл прекращается, когда фотон поглощён, вышел, достигнут лимит maxEvents.
 Simulation::Result Simulation::run(const Vec3& startPosition, const Vec3& startDirection, int maxEvents) const {
     if (maxEvents <= 0)
         throw std::invalid_argument("maxEvents должен быть > 0");
@@ -286,6 +306,7 @@ Simulation::Result Simulation::run(const Vec3& startPosition, const Vec3& startD
             photon.getPosition(), photon.getDirection()};
 }
 
+// photonCount независимых траекторний. Для каждой - один итоговый статус, сумма пройденных путей и затем вычисление средней длины пути.
 Simulation::Statistics Simulation::runMany(const Vec3& startPosition, const Vec3& startDirection, std::uint64_t photonCount, int maxEvents) const {
     Statistics stats;
     stats.launched = photonCount;

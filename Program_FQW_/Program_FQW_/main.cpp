@@ -5,6 +5,7 @@
 #include <string>
 
 
+// чтобы читать из консоли, пустая строка - значение по умолчанию, если введенное не преобразуется - ошибка
 namespace {
     template <typename T>
     T readValue(const std::string& prompt, T defaultValue) {
@@ -26,11 +27,18 @@ namespace {
 
 int main() {
     try {
+        // все расстояния вводятся в метрах, кроме высоты в километрах, она переводится в метры позже
         std::cout << "Моделирование переноса фотонов в сферической атмосфере Земли (Монте-Карло)\n";
         
+        // photonCount - число фотонных траекторий;
+        // mediumType - 1: однородная атмосфера, 2: атмосфера слоистая;
+        // groundType - 1: поверхность поглощает, 2: отражает диффузно;
+        // latitudeDeg/longitudeDeg - точка старта по географии;
+        // scattering и absorption - это mu_s и mu_a (1/м).
+        
         const std::uint64_t photonCount = readValue<std::uint64_t>("Число фотонов", 10000);
-        const int mediumType = readValue<int>("Среда: 1 — однородная, 2 — слоистая", 1);
-        const int groundType = readValue<int>("Поверхность Земли: 1 — поглощает, 2 — диффузно отражает", 1);
+        const int mediumType = readValue<int>("Среда: 1 - однородная, 2 - слоистая", 1);
+        const int groundType = readValue<int>("Поверхность Земли: 1 - поглощает, 2 - диффузно отражает", 1);
         const double atmosphereHeightKm = readValue<double>("Высота атмосферы, км", 100.0);
         const double latitudeDeg = readValue<double>("Широта стартовой точки, градусы", 0.0);
         const double longitudeDeg = readValue<double>("Долгота стартовой точки, градусы", 0.0);
@@ -43,12 +51,14 @@ int main() {
             (groundType != 1 && groundType != 2))
             throw std::invalid_argument("Проверьте тип среды, режим поверхности, высоту и координаты");
 
+        // Средний радиус Земли в метрах. Верхняя граница атмосферы - сфера радиуса earthRadius + topHeight; поверхность Земли - сфера радиуса earthRadius.
         constexpr double earthRadius = 6371000.0;
         const double topHeight = atmosphereHeightKm*1000.0;
         
         std::shared_ptr<IAtmosphere> atmosphere;
         
         if (mediumType == 2) {
+            // тест из трёх слоёв
             std::vector<LayeredAtmosphere::Layer> layers{
                 {0.0, std::min(10000.0, topHeight), scattering*3.0, absorption*2.0, 1.0},
                 {std::min(10000.0, topHeight), std::min(30000.0, topHeight), scattering, absorption, 2.0},
@@ -63,6 +73,7 @@ int main() {
             atmosphere = std::make_shared<SimpleAtmosphere>(0.0, topHeight, scattering, absorption);
         }
  
+        // Перевод географических углов в радианы. Единичный вектор normal направлен от центра Земли к заданной точке поверхности; поэтому startPosition = normal * earthRadius лежит на сфере Земли.
         const double lat = latitudeDeg*FQW_PI/180.0;
         const double lon = longitudeDeg*FQW_PI/180.0;
         
@@ -72,8 +83,9 @@ int main() {
         
         Simulation simulation(atmosphere, earthRadius, groundMode);
         
+        // все фотоны стартуют вверх, надо доделать
         const auto stats = simulation.runMany(startPosition, normal, photonCount);
-
+        // баланс проверяет равенство launched = escaped + atmosphereAbsorbed + groundAbsorbed + active.
         std::cout << "\n\n------------------- Результаты -------------------\n" << std::fixed << std::setprecision(6);
         std::cout << "Запущено фотонов:             " << stats.launched << '\n';
         std::cout << "Вышло из атмосферы:           " << stats.escaped << " (" << 100.0*stats.escapedFraction() << " %)\n";
